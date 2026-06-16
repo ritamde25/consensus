@@ -1,0 +1,170 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+}
+
+model User {
+  id              String   @id @default(uuid())
+  supabaseUid     String   @unique
+
+  usdBalance      Int      @default(0)
+  lockedBalance   Int      @default(0)
+
+  positions       Position[]
+  orders          Order[]
+
+  takerTrades     Trade[] @relation("TakerTrades")
+  makerTrades     Trade[] @relation("MakerTrades")
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([supabaseUid])
+}
+
+model Market {
+  id                  String   @id @default(uuid())
+
+  title               String
+  description         String
+
+  resolutionDeadline  DateTime
+
+  isResolved          Boolean  @default(false)
+  resolvedOutcome     Outcome?
+
+  orders              Order[]
+  trades              Trade[]
+  positions           Position[]
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([id])
+  @@index([isResolved])
+  @@unique([title])
+}
+
+model MarketAnalysis {
+  marketId            String   @id
+  content             String
+  generatedAt         DateTime @default(now())
+}
+
+model Order {
+  id                  String      @id @default(uuid())
+
+  userId              String
+  marketId            String
+
+  side                OrderSide
+  outcome             Outcome
+  price               Int         // cents (0-100)
+
+  normalizedSide      OrderSide   // Buy No -> Sell yes, Sell No -> Buy yes
+  normalizedPrice     Int         // Stoes the Yes Eq price for matching engine
+
+  quantity            Int         // immutable original size
+  remaining           Int         // decremented during matching
+
+  status              OrderStatus @default(OPEN)
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user                User   @relation(fields: [userId], references: [id])
+  market              Market @relation(fields: [marketId], references: [id])
+
+  takerTrades Trade[] @relation("TakerOrder")
+  makerTrades Trade[] @relation("MakerOrder")
+
+  @@index([userId])
+  @@index([marketId])
+
+  // matching engine
+  @@index([marketId, normalizedSide, status, normalizedPrice, createdAt])
+  @@index([marketId, status])
+}
+
+model Trade {
+  id                  String   @id @default(uuid())
+
+  marketId            String
+
+  takerId             String
+  makerId             String
+
+  quantity            Int         // filled quantity
+
+  takerPrice          Int
+  makerPrice          Int
+
+  takerOrderId        String
+  makerOrderId        String
+
+  takerOutcome        Outcome
+  makerOutcome        Outcome
+
+  createdAt           DateTime @default(now())
+
+  market              Market @relation(fields: [marketId], references: [id])
+
+  taker              User @relation("TakerTrades",fields: [takerId],references: [id])
+  maker              User @relation("MakerTrades",fields: [makerId],references: [id])
+
+  takerOrder Order @relation("TakerOrder", fields: [takerOrderId], references: [id])
+  makerOrder Order @relation("MakerOrder", fields: [makerOrderId], references: [id])
+
+  @@index([marketId])
+  @@index([takerId])
+  @@index([makerId])
+
+  @@index([takerOrderId])
+  @@index([makerOrderId])
+}
+
+model Position {
+  id                  String   @id @default(uuid())
+
+  userId              String
+  marketId            String
+
+  yesShares           Int      @default(0)
+  noShares            Int      @default(0)
+
+  lockedYesShares     Int      @default(0)
+  lockedNoShares      Int      @default(0)
+
+  totalSpent          Int      @default(0)            // buy cost - sell proceeds
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user                User   @relation(fields: [userId], references: [id])
+  market              Market @relation(fields: [marketId], references: [id])
+
+  @@unique([userId, marketId])
+
+  @@index([marketId])
+}
+
+enum OrderStatus {
+  OPEN
+  PARTIAL
+  FILLED
+  CANCELLED
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum Outcome {
+  YES
+  NO
+}

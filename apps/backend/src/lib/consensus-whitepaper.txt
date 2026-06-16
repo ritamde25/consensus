@@ -1,0 +1,356 @@
+Consensus - A Polymarket-style Binary prediction market
+
+Core Market Features:
+1. Order -> Buy or Sell
+2. Split -> Generates 1 Yes + 1 No Share for 1 USD
+3. Merge -> Merges 1 Yes and 1 No, returns 1 USD
+
+- Split is used to inject shares into the market
+- After splitting, users can sell off either side partially
+- Dual YES/NO representation is required even though they sum to 1, to preserve user intent and enable split/merge functionality
+
+
+Key Logic
+- DB schemas preserve data in dual YES and NO mode
+- Matching engine uses YES-space price AND side normalization for matching
+- Execution ALWAYS preserves original order intent (YES or NO)
+- Orders are NEVER semantically converted between YES/NO during execution
+- getOrderBook API may apply price normalization for display only (YES-space view)
+
+
+Matching Rules (Execution Layer - matchingEngine.ts & heapMatchingEngine.ts)
+
+Orderbook Structure:
+- Single Order table with side, outcome, price, normalizedSide, and normalizedPrice fields
+- normalizedSide = YES-equivalent side used for matching engine:
+  - Buy YES @ p -> normalizedSide = BUY, normalizedPrice = p
+  - Sell YES @ p -> normalizedSide = SELL, normalizedPrice = 100-p
+  - Buy NO @ p -> normalizedSide = SELL, normalizedPrice = 100-p
+  - Sell NO @ p -> normalizedSide = BUY, normalizedPrice = p
+- Orders are indexed by [marketId, normalizedSide, status, normalizedPrice, createdAt] for efficient matching
+- Query orders with status = OPEN or PARTIAL and remaining > 0
+
+Price & Side Normalization (Equivalence Relation):
+All orders are converted to YES-space for matching using this equivalence:
+- Buy YES @ p → BUY @ p (normalized)
+- Sell YES @ p → SELL @ (100-p) (normalized)
+- Buy NO @ p → SELL @ (100-p) (normalized)
+- Sell NO @ p → BUY @ p (normalized)
+
+This means:
+- All incoming orders are converted to normalized YES-space (BUY/SELL with YES-equivalent prices)
+- Matching happens between normalized BUY orders and normalized SELL orders
+- Normalized BUY orders match normalized SELL orders where normalizedPrice <= buyPrice (ascending sells)
+- Normalized SELL orders match normalized BUY orders where normalizedPrice >= sellPrice (descending buys)
+
+Matching Logic:
+All matching happens in normalized YES-space using normalizedSide and normalizedPrice:
+1. Incoming Buy YES @ p: normalizedSide = BUY, normalizedPrice = p, matches against normalized SELL orders where normalizedPrice <= p (ascending)
+2. Incoming Sell YES @ p: normalizedSide = SELL, normalizedPrice = 100-p, matches against normalized BUY orders where normalizedPrice >= (100-p) (descending)
+3. Incoming Buy NO @ p: normalizedSide = SELL, normalizedPrice = 100-p, matches against normalized BUY orders where normalizedPrice >= (100-p) (descending)
+4. Incoming Sell NO @ p: normalizedSide = BUY, normalizedPrice = p, matches against normalized SELL orders where normalizedPrice <= p (ascending)
+
+Order Placement:
+- All unfilled orders are placed in their original form (not converted)
+- Original side, outcome, and price are preserved in the database
+- normalizedSide and normalizedPrice are computed and stored for efficient matching
+
+Position Update Rules:
+- Always update positions based on Order.outcome (YES or NO)
+- Buy orders increment the corresponding shares
+- Sell orders decrement the corresponding shares
+
+Balance Update Rules:
+- Buy orders: use original price * qty for balance operations
+- Sell orders: use matched maker's price * qty for balance operations
+
+- Matching engine does NOT change stored order outcome
+- Outcome (YES/NO) is preserved in DB and trades
+- Position updates are ALWAYS based on Order.outcome only.
+  Price normalization is ONLY used for matching, never for accounting.
+
+Matching Engine Implementations:
+- matchingEngine.ts: Database-backed matching using FOR UPDATE locks on candidate orders
+- heapMatchingEngine.ts: In-memory orderbook using heap-based OrderBook for faster matching
+- Both implement the same normalization and matching logic
+
+
+Schema
+
+model User {
+  id              String   @id @default(uuid())
+  supabaseUid     String   @unique
+  usdBalance      Int      @default(0)    // active wallet balance in cents
+  lockedBalance   Int      @default(0)    // reserved funds
+  positions       Position[]
+  orders          Order[]
+  takerTrades     Trade[] @relation("TakerTrades")
+  makerTrades     Trade[] @relation("MakerTrades")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  @@index([supabaseUid])
+}
+
+model Market {
+  id                  String   @id @default(uuid())
+  title               String
+  description         String
+  resolutionDeadline  DateTime
+  isResolved          Boolean  @default(false)
+  resolvedOutcome     Outcome?
+  orders              Order[]
+  trades              Trade[]
+  positions           Position[]
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  @@index([id])
+  @@index([isResolved])
+  @@unique([title])
+}
+
+model Order {
+  id                  String      @id @default(uuid())
+  userId              String
+  marketId            String
+  side                OrderSide   // BUY / SELL (original intent)
+  outcome             Outcome     // YES / NO (ALWAYS ORIGINAL INTENT)
+  price               Int         // cents (0–100) - user's limit price
+  normalizedSide      OrderSide   // YES-equivalent side for matching engine
+  normalizedPrice     Int         // YES-equivalent price for matching engine
+  quantity            Int         // immutable original size
+  remaining           Int         // decremented during matching
+  status              OrderStatus @default(OPEN) // OPEN / PARTIAL / FILLED / CANCELLED
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User   @relation(fields: [userId], references: [id])
+  market              Market @relation(fields: [marketId], references: [id])
+  takerTrades Trade[] @relation("TakerOrder")
+  makerTrades Trade[] @relation("MakerOrder")
+  @@index([userId])
+  @@index([marketId])
+  @@index([marketId, normalizedSide, status, normalizedPrice, createdAt])
+  @@index([marketId, status])
+}
+
+model Trade {
+  id                  String   @id @default(uuid())
+  marketId            String
+  takerId             String    // userId of new incoming order
+  makerId             String    // userId with order in orderbook enabling match
+  quantity            Int       // filled quantity
+  takerPrice          Int
+  makerPrice          Int
+  takerOrderId        String
+  makerOrderId        String
+  takerOutcome        Outcome
+  makerOutcome        Outcome
+  createdAt           DateTime @default(now())
+  market              Market @relation(fields: [marketId], references: [id])
+  taker              User @relation("TakerTrades",fields: [takerId],references: [id])
+  maker              User @relation("MakerTrades",fields: [makerId],references: [id])
+  takerOrder Order @relation("TakerOrder", fields: [takerOrderId], references: [id])
+  makerOrder Order @relation("MakerOrder", fields: [makerOrderId], references: [id])
+  @@index([marketId])
+  @@index([takerId])
+  @@index([makerId])
+  @@index([takerOrderId])
+  @@index([makerOrderId])
+}
+
+model Position {
+  id                  String   @id @default(uuid())
+  userId              String
+  marketId            String
+  yesShares           Int      @default(0)    // cannot be negative
+  noShares            Int      @default(0)    // cannot be negative
+  lockedYesShares     Int      @default(0)
+  lockedNoShares      Int      @default(0)
+  totalSpent          Int      @default(0)    // buy cost - sell proceeds in cents
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User   @relation(fields: [userId], references: [id])
+  market              Market @relation(fields: [marketId], references: [id])
+  @@unique([userId, marketId])
+  @@index([marketId])
+}
+
+enum OrderStatus {
+  OPEN
+  PARTIAL
+  FILLED
+  CANCELLED
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum Outcome {
+  YES
+  NO
+}
+
+
+Matching Engine Execution Flow
+
+Global Requirement
+- All operations must use row-level locks (FOR UPDATE) inside a transaction
+- Lock order:
+  1. User row (FOR UPDATE)
+  2. Position row (FOR UPDATE)
+  3. Market orders are queried with appropriate indexes but not locked individually (matchingEngine) or managed in-memory (heapMatchingEngine)
+- Query matching orders using:
+  WHERE marketId = ? AND normalizedSide = ? AND status IN (OPEN, PARTIAL) AND remaining > 0
+  ORDER BY normalizedPrice ASC (for normalized buys) or DESC (for normalized sells)
+
+Matching Engine (2-case execution model based on normalizedSide)
+
+Price & Side normalization (stored in Order.normalizedSide and Order.normalizedPrice):
+- Buy YES @ p → normalizedSide = BUY, normalizedPrice = p
+- Sell YES @ p → normalizedSide = SELL, normalizedPrice = (100 - p)
+- Buy NO @ p → normalizedSide = SELL, normalizedPrice = (100 - p)
+- Sell NO @ p → normalizedSide = BUY, normalizedPrice = p
+
+Batch Maker Trade updates using createMany
+
+
+CASES
+
+1. Normalized BUY (Buy YES @ p OR Sell NO @ p)
+
+- If Buy YES @ p:
+  - Check: usdBalance >= p*x
+  - Move p*x from usdBalance -> lockedBalance
+  - Create Order(BUY, YES, p, x, normalizedSide: BUY, normalizedPrice: p)
+- If Sell NO @ p:
+  - Check: noShares >= x
+  - Move x from position.noShares -> lockedNoShares
+  - Create Order(SELL, NO, p, x, normalizedSide: BUY, normalizedPrice: p)
+
+Matching Process (normalized BUY matches against normalized SELL):
+- leftQty = x
+- Query normalized SELL orders with status IN (OPEN, PARTIAL) AND remaining > 0
+  WHERE marketId = ? AND normalizedSide = SELL AND status IN (OPEN, PARTIAL) AND remaining > 0
+  ORDER BY normalizedPrice ASC (lowest normalizedPrice first)
+- For each matching order where normalizedPrice <= buyPrice:
+  - matchedQty = min(order.remaining, leftQty)
+  - If maker is Sell YES:
+    - maker.position.lockedYesShares -= matchedQty
+    - maker.usdBalance += maker.price * matchedQty
+    - maker.position.totalSpent -= maker.price * matchedQty
+  - If maker is Buy NO (normalized SELL):
+    - maker.position.noShares += matchedQty
+    - maker.lockedBalance -= maker.price * matchedQty
+    - maker.position.totalSpent += maker.price * matchedQty
+  - If taker is Buy YES:
+    - taker.position.yesShares += matchedQty
+    - taker.position.totalSpent += maker.price * matchedQty
+  - If taker is Sell NO:
+    - taker.position.lockedNoShares -= matchedQty
+    - taker.position.totalSpent -= maker.price * matchedQty
+  - order.remaining -= matchedQty
+  - order.status = updateOrderStatus(order.remaining, order.quantity)
+  - Create Trade: quantity: matchedQty, taker: takerUserId, maker: makerUserId
+  - leftQty -= matchedQty
+
+Taker Finalization:
+- If taker is Buy YES:
+  - lockedBalance -= p*filled_qty
+  - usdBalance += (p*filled_qty - total_spent)
+  - remaining order stays as BUY YES @ p (no conversion)
+- If taker is Sell NO:
+  - usdBalance += total_spent
+  - remaining order stays as SELL NO @ p (no conversion)
+
+Order:
+- remaining -= filled_qty
+- status = updateOrderStatus(remaining, quantity)
+
+Position:
+- If Buy YES: yesShares += filled_qty, totalSpent += total_spent
+- If Sell NO: lockedNoShares -= filled_qty, totalSpent -= total_spent
+
+
+2. Normalized SELL (Sell YES @ p OR Buy NO @ p)
+
+- If Sell YES @ p:
+  - Check: yesShares >= x
+  - Move x from position.yesShares -> lockedYesShares
+  - Create Order(SELL, YES, p, x, normalizedSide: SELL, normalizedPrice: 100-p)
+- If Buy NO @ p:
+  - Check: usdBalance >= p*x
+  - Move p*x from usdBalance -> lockedBalance
+  - Create Order(BUY, NO, p, x, normalizedSide: SELL, normalizedPrice: 100-p)
+
+Matching Process (normalized SELL matches against normalized BUY):
+- leftQty = x
+- Query normalized BUY orders with status IN (OPEN, PARTIAL) AND remaining > 0
+  WHERE marketId = ? AND normalizedSide = BUY AND status IN (OPEN, PARTIAL) AND remaining > 0
+  ORDER BY normalizedPrice DESC (highest normalizedPrice first)
+- For each matching order where normalizedPrice >= sellPrice:
+  - matchedQty = min(order.remaining, leftQty)
+  - If maker is Buy YES:
+    - maker.position.yesShares += matchedQty
+    - maker.lockedBalance -= maker.price * matchedQty
+    - maker.position.totalSpent += maker.price * matchedQty
+  - If maker is Sell NO (normalized BUY):
+    - maker.position.lockedNoShares -= matchedQty
+    - maker.usdBalance += maker.price * matchedQty
+    - maker.position.totalSpent -= maker.price * matchedQty
+  - If taker is Sell YES:
+    - taker.position.lockedYesShares -= matchedQty
+    - taker.position.totalSpent -= maker.price * matchedQty
+  - If taker is Buy NO:
+    - taker.position.noShares += matchedQty
+    - taker.position.totalSpent += maker.price * matchedQty
+  - order.remaining -= matchedQty
+  - order.status = updateOrderStatus(order.remaining, order.quantity)
+  - Create Trade: quantity: matchedQty, taker: takerUserId, maker: makerUserId
+  - leftQty -= matchedQty
+
+Taker Finalization:
+- If taker is Sell YES:
+  - usdBalance += total_spent
+  - remaining order stays as SELL YES @ p (no conversion)
+- If taker is Buy NO:
+  - lockedBalance -= p*filled_qty
+  - usdBalance += (p*filled_qty - total_spent)
+  - remaining order stays as BUY NO @ p (no conversion)
+
+Order:
+- remaining -= filled_qty
+- status = updateOrderStatus(remaining, quantity)
+
+Position:
+- If Sell YES: lockedYesShares -= filled_qty, totalSpent -= total_spent
+- If Buy NO: noShares += filled_qty, totalSpent += total_spent
+
+
+Settlement Logic
+
+Settlement Flow:
+1. Verify market exists and is not already resolved
+2. Cancel all OPEN and PARTIAL orders for the market
+3. Calculate and distribute payouts to all positions
+4. Mark market as resolved
+
+Order Cancellation:
+For each OPEN or PARTIAL order:
+- If SELL order:
+  - Unlock locked shares: lockedYesShares -> yesShares or lockedNoShares -> noShares
+- If BUY order:
+  - Refund remaining reserved collateral: lockedBalance -> usdBalance
+- Update order:
+  - remaining = 0
+  - status = CANCELLED
+
+Payout Calculation:
+For each position in the market:
+- If outcome = YES: payout = Position.yesShares * 100
+- If outcome = NO: payout = Position.noShares * 100
+- If payout > 0: user.usdBalance += payout
+
+Final PnL:
+- PnL = payout - Position.totalSpent (net profit/loss per position)
+- Settlement adds payout to user.usdBalance

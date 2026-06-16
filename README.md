@@ -1,3 +1,9 @@
+You can mention in README:
+
+future work: margin + collateralized shorting
+future work: portfolio-level risk engine
+future work: partial netting across markets
+
 # Turborepo starter
 
 This Turborepo starter is maintained by the Turborepo core team.

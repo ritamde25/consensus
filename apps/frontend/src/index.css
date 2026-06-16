@@ -1,0 +1,423 @@
+@import "tailwindcss";
+
+@theme {
+  /* Core */
+  --color-background: #0b0f14;
+
+  /* Surface hierarchy */
+  --color-surface: #111827;
+  --color-surface-2: #161f2b;
+  --color-surface-3: #1d2838;
+
+  /* Borders */
+  --color-border: #253041;
+  --color-border-hover: #334155;
+
+  /* Typography */
+  --color-text: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+
+  /* Brand */
+  --color-accent: #3b82f6;
+  --color-accent-hover: #2563eb;
+
+  /* Trading */
+  --color-yes: #10b981;
+  --color-no: #b45309;
+
+  /* Status */
+  --color-success: #16a34a;
+  --color-warning: #d97706;
+  --color-danger: #dc2626;
+
+  /* Radius */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  /* Shadow */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
+
+  /* Layout */
+  --container-sm: 960px;
+  --container-md: 1440px;
+  --container-lg: 1800px;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    sans-serif;
+  line-height: 1.5;
+}
+
+/* Typography */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin: 0;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+h1 {
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+
+h2 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+h3 {
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+/* Links */
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.numeric-cell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.text-cell {
+  text-align: left;
+}
+
+/* Forms */
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+input,
+textarea,
+select {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+}
+
+input:hover,
+textarea:hover,
+select:hover {
+  border-color: var(--color-border-hover);
+}
+
+/* Focus */
+
+:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px var(--color-background),
+    0 0 0 4px var(--color-accent);
+}
+
+/* Selection */
+
+::selection {
+  background: rgba(59, 130, 246, 0.25);
+}
+
+/* Scrollbar */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-hover);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Financial Numbers */
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+
+/* Trading */
+
+.text-yes {
+  color: var(--color-yes);
+}
+
+.text-no {
+  color: var(--color-no);
+}
+
+.bg-yes-soft {
+  background: rgb(16 185 129 / 0.08);
+}
+
+.bg-no-soft {
+  background: rgb(180 83 9 / 0.08);
+}
+
+/* Surface Utilities */
+
+.surface {
+  background: var(--color-surface);
+}
+
+.surface-2 {
+  background: var(--color-surface-2);
+}
+
+.surface-3 {
+  background: var(--color-surface-3);
+}
+
+/* Layout */
+
+.page-container {
+  width: 100%;
+  max-width: var(--container-md);
+  margin-inline: auto;
+  padding-inline: 1rem;
+  padding-block: 1.5rem;
+}
+
+.page-container-sm {
+  width: 100%;
+  max-width: var(--container-sm);
+  margin-inline: auto;
+  padding-inline: 1rem;
+  padding-block: 1.5rem;
+}
+
+.page-container-wide {
+  width: 100%;
+  max-width: var(--container-lg);
+  margin-inline: auto;
+  padding-inline: 1rem;
+  padding-block: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  .page-container,
+  .page-container-sm,
+  .page-container-wide {
+    padding-inline: 1.5rem;
+  }
+}
+
+@media (min-width: 1280px) {
+  .page-container,
+  .page-container-sm,
+  .page-container-wide {
+    padding-inline: 2rem;
+  }
+}
+
+/* Layout Primitives */
+
+.stack-xs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.stack-sm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.stack-md {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.stack-lg {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.stack-xl {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+/* Trading Layouts */
+
+.market-layout {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sidebar-layout {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1024px) {
+  .market-layout {
+    grid-template-columns: minmax(0, 1fr) 380px;
+  }
+
+  .sidebar-layout {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
+}
+
+/* Cards */
+
+.trading-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.trading-card:hover {
+  border-color: var(--color-border-hover);
+}
+
+.trading-card-header {
+  padding: 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.trading-card-body {
+  padding: 1rem;
+}
+
+.trading-card-footer {
+  padding: 1rem;
+  border-top: 1px solid var(--color-border);
+}
+
+/* Tables */
+
+.table-container {
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  text-align: left;
+  padding: 0.75rem 1rem;
+}
+
+td {
+  padding: 0.875rem 1rem;
+}
+
+tr:not(:last-child) {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.dense td {
+  padding: 0.625rem 1rem;
+}
+
+.comfortable td {
+  padding: 0.875rem 1rem;
+}
+
+/* Loading Animations */
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes progress {
+  0% {
+    width: 0%;
+  }
+  50% {
+    width: 70%;
+  }
+  100% {
+    width: 100%;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite;
+}
+
+.animate-progress {
+  animation: progress 2s ease-in-out infinite;
+}
