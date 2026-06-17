@@ -29,6 +29,7 @@ export function Portfolio() {
 
   const { openModal } = useModalStore()
   const [activeTab, setActiveTab] = useState<'positions' | 'history'>('positions')
+  const handleTabChange = (value: string) => setActiveTab(value as 'positions' | 'history')
 
   const isLoading = balanceLoading || positionsLoading || historyLoading
   const balance = balanceData?.balance;
@@ -124,7 +125,7 @@ export function Portfolio() {
 
         {/* Main panel */}
         <div className="border border-border/60 bg-surface/95 rounded-xl shadow-lg overflow-hidden">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+          <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
             {/* Modern tab selector with cleaner design */}
             <div className="border-b border-border/40 bg-surface-2/50">
               <TabsList className="grid grid-cols-2 h-11 w-full bg-transparent border-0 shadow-none p-0">

@@ -28,6 +28,7 @@ export function MarketDetails() {
   const [selectedOrder, setSelectedOrder] =
     useState<SelectedOrder | null>(null)
   const [activeTab, setActiveTab] = useState<'trade' | 'positions'>('trade')
+  const handleTabChange = (value: string) => setActiveTab(value as 'trade' | 'positions')
 
   const handleOrderClick = (price: number, quantity: number, side: 'BUY' | 'SELL') => {
     setSelectedOrder({ price, quantity, side })
@@ -255,7 +256,7 @@ export function MarketDetails() {
           <div className="lg:col-span-1">
             <Stack spacing={4}>
               {canTrade ? (
-                <Tabs value={activeTab} onValueChange={setActiveTab}>
+                <Tabs value={activeTab} onValueChange={handleTabChange}>
                   {/* Modern segmented control style */}
                   <TabsList className="grid grid-cols-2 h-11 w-full bg-surface-2/50 border border-border/40 rounded-lg p-1 gap-1">
                     <TabsTrigger value="trade" className="text-sm font-medium data-[state=active]:bg-surface data-[state=active]:text-text data-[state=active]:shadow-sm data-[state=active]:border data-[state=active]:border-border/30 transition-all duration-200 rounded-md hover:bg-surface/80">
