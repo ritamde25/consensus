@@ -7,7 +7,18 @@ import { PrismaPg } from "@prisma/adapter-pg";
 
 const packageRoot = dirname(fileURLToPath(import.meta.url));
 
-config({ path: resolve(packageRoot, ".env"), quiet: true });
+if (process.env.NODE_ENV !== "production") {
+  config({
+    path: resolve(packageRoot, ".env"),
+    quiet: true,
+  });
+} else {
+  // Load from Render secret file manually if needed
+  config({
+    path: "/etc/secrets/.env",
+    quiet: true,
+  });
+}
 
 const connectionString = process.env.DATABASE_URL;
 if (!connectionString) {
