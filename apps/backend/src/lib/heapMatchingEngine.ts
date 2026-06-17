@@ -8,6 +8,18 @@ type PlaceOrderParams = { userId: string } & PlaceOrderInput;
 
 type TransactionClient = Prisma.TransactionClient;
 
+type MakerOrderUpdate = { id: string; remaining: number; status: OrderStatus };
+type MakerBalanceUpdate = { userId: string; amount: number; isMakerOnYes: boolean };
+type MakerPositionUpdate = { userId: string; quantity: number; proceeds: number; isMakerOnYes: boolean };
+
+type UpdateTakerParams = {
+  marketId: string;
+  trades: Prisma.TradeCreateManyInput[];
+  makerOrderUpdates: MakerOrderUpdate[];
+  makerBalanceUpdates: MakerBalanceUpdate[];
+  makerPositionUpdates: MakerPositionUpdate[];
+};
+
 const books = new Map<string, OrderBook>();
 
 export async function hydrateAllBooks() {
@@ -58,6 +70,10 @@ const getNormalizedPrice = (outcome: Outcome, price: number) =>
 function calculateOrderStatus(remaining: number, filled: number): OrderStatus {
   return remaining === 0 ? "FILLED" : filled > 0 ? "PARTIAL" : "OPEN";
 }
+
+
+// Hot path: in-memory order matching + immediate trade calculation (latency-critical, runs per request)
+// Cold path: DB persistence (orders, trades, balances) executed async after response for durability
 
 export async function placeOrder(params: PlaceOrderParams): Promise<PlaceOrderResult> {
   const { userId, marketId, side, outcome, price, quantity } = params;
@@ -127,9 +143,9 @@ async function executeBuy(
   let totalAmount = 0;
 
   const trades: Prisma.TradeCreateManyInput[] = [];
-  const makerOrderUpdates: { id: string; remaining: number; status: OrderStatus }[] = [];
-  const makerBalanceUpdates: { userId: string; amount: number; isMakerSellYes: boolean }[] = [];
-  const makerPositionUpdates: { userId: string; quantity: number; proceeds: number; isMakerSellYes: boolean }[] = [];
+  const makerOrderUpdates: MakerOrderUpdate[] = [];
+  const makerBalanceUpdates: MakerBalanceUpdate[] = [];
+  const makerPositionUpdates: MakerPositionUpdate[] = [];
 
   for (const maker of matchingOrders) {
     if (filledQty >= quantity) break;
@@ -139,14 +155,14 @@ async function executeBuy(
     const makerProceeds = maker.price * matchQty;
     const newRemaining = maker.remaining - matchQty;
 
-    const isMakerSellYes = maker.outcome === "YES";
+    const isMakerOnYes = maker.outcome === "YES";
 
     filledQty += matchQty;
     totalAmount += isBuyYes ? makerProceeds : 100 - makerProceeds;
 
     makerOrderUpdates.push({ id: maker.id, remaining: newRemaining, status: newRemaining === 0 ? "FILLED" : "PARTIAL" });
-    makerBalanceUpdates.push({ userId: maker.userId, amount: makerProceeds, isMakerSellYes });
-    makerPositionUpdates.push({ userId: maker.userId, quantity: matchQty, proceeds: makerProceeds, isMakerSellYes });
+    makerBalanceUpdates.push({ userId: maker.userId, amount: makerProceeds, isMakerOnYes });
+    makerPositionUpdates.push({ userId: maker.userId, quantity: matchQty, proceeds: makerProceeds, isMakerOnYes });
     trades.push({
       marketId, takerId: userId, makerId: maker.userId,
       quantity: matchQty, takerPrice: price, makerPrice: maker.price,
@@ -166,54 +182,6 @@ async function executeBuy(
       });
     }
   }
-
-  if (trades.length > 0) tx.trade.createMany({ data: trades });
-
-  await Promise.all(
-    makerOrderUpdates.map(u =>
-      tx.order.update({
-        where: { id: u.id },
-        data: { remaining: u.remaining, status: u.status },
-      })
-    )
-  );
-
-  await Promise.all(
-    makerBalanceUpdates.map((u) =>
-      u.isMakerSellYes
-        ? tx.user.update({
-            where: { id: u.userId },
-            data: { usdBalance: { increment: u.amount } },
-          })
-        : tx.user.update({
-            where: { id: u.userId },
-            data: { lockedBalance: { decrement: u.amount } },
-          })
-    )
-  );
-
-
-  await Promise.all(
-    makerPositionUpdates.map((u) =>
-      tx.position.update({
-        where: {
-          userId_marketId: {
-            userId: u.userId,
-            marketId,
-          },
-        },
-        data: u.isMakerSellYes
-          ? {
-              lockedYesShares: { decrement: u.quantity },
-              totalSpent: { decrement: u.proceeds },
-            }
-          : {
-              noShares: { increment: u.quantity },
-              totalSpent: { increment: u.proceeds },
-            },
-      })
-    )
-  );
 
   const buyRefund = price * filledQty - totalAmount;
   const remaining = quantity - filledQty;
@@ -256,8 +224,12 @@ async function executeBuy(
     book.insert(engineOrder);
   }
 
+  updateTakerBuy({ marketId, trades, makerOrderUpdates, makerBalanceUpdates, makerPositionUpdates });
+
   return { orderId: order.id, filledQuantity: filledQty, remainingQuantity: remaining, status, trades: trades.length };
 }
+
+
 
 async function executeSell(
   tx: TransactionClient, params: PlaceOrderParams, normalizedPrice: number, marketId: string,
@@ -288,9 +260,9 @@ async function executeSell(
   let totalAmount = 0;
 
   const trades: Prisma.TradeCreateManyInput[] = [];
-  const makerOrderUpdates: { id: string; remaining: number; status: OrderStatus }[] = [];
-  const makerBalanceUpdates: { userId: string; amount: number; isMakerBuyYes: boolean }[] = [];
-  const makerPositionUpdates: { userId: string; quantity: number; proceeds: number; isMakerBuyYes: boolean }[] = [];
+  const makerOrderUpdates: MakerOrderUpdate[] = [];
+  const makerBalanceUpdates: MakerBalanceUpdate[] = [];
+  const makerPositionUpdates: MakerPositionUpdate[] = [];
 
   for (const maker of matchingOrders) {
     if (filledQty >= quantity) break;
@@ -300,14 +272,14 @@ async function executeSell(
     const makerProceeds = maker.price * matchQty;
     const newRemaining = maker.remaining - matchQty;
 
-    const isMakerBuyYes = maker.outcome === "YES";
+    const isMakerOnYes = maker.outcome === "YES";
 
     filledQty += matchQty;
     totalAmount += isSellYes? makerProceeds : 100 - makerProceeds;
 
     makerOrderUpdates.push({ id: maker.id, remaining: newRemaining, status: newRemaining === 0 ? "FILLED" : "PARTIAL" });
-    makerBalanceUpdates.push({ userId: maker.userId, amount: makerProceeds, isMakerBuyYes });
-    makerPositionUpdates.push({ userId: maker.userId, quantity: matchQty, proceeds: makerProceeds, isMakerBuyYes });
+    makerBalanceUpdates.push({ userId: maker.userId, amount: makerProceeds, isMakerOnYes });
+    makerPositionUpdates.push({ userId: maker.userId, quantity: matchQty, proceeds: makerProceeds, isMakerOnYes });
     trades.push({
       marketId, takerId: userId, makerId: maker.userId,
       quantity: matchQty, takerPrice: price, makerPrice: maker.price,
@@ -327,53 +299,6 @@ async function executeSell(
       });
     }
   }
-
-  if (trades.length > 0) await tx.trade.createMany({ data: trades });
-
-  await Promise.all(
-    makerOrderUpdates.map((u) =>
-      tx.order.update({
-        where: { id: u.id },
-        data: { remaining: u.remaining, status: u.status },
-      })
-    )
-  );
-  
-  await Promise.all(
-    makerBalanceUpdates.map((u) =>
-      u.isMakerBuyYes
-        ? tx.user.update({
-            where: { id: u.userId },
-            data: { lockedBalance: { decrement: u.amount } },
-          })
-        : tx.user.update({
-            where: { id: u.userId },
-            data: { usdBalance: { increment: u.amount } },
-          })
-    )
-  );
-  
-  await Promise.all(
-    makerPositionUpdates.map((u) =>
-      tx.position.update({
-        where: {
-          userId_marketId: {
-            userId: u.userId,
-            marketId,
-          },
-        },
-        data: u.isMakerBuyYes
-          ? {
-              yesShares: { increment: u.quantity },
-              totalSpent: { increment: u.proceeds },
-            }
-          : {
-              lockedNoShares: { decrement: u.quantity },
-              totalSpent: { decrement: u.proceeds },
-            },
-      })
-    )
-  );
 
   const buyRefund = price * filledQty - totalAmount;
   const remaining = quantity - filledQty;
@@ -416,5 +341,110 @@ async function executeSell(
     book.insert(engineOrder);
   }
 
+  updateTakerSell({ marketId, trades, makerOrderUpdates, makerBalanceUpdates, makerPositionUpdates });
+
   return { orderId: order.id, filledQuantity: filledQty, remainingQuantity: remaining, status, trades: trades.length };
+}
+
+
+function updateTakerBuy({ marketId, trades, makerOrderUpdates, makerBalanceUpdates, makerPositionUpdates }: UpdateTakerParams) {
+  void (async () => {
+    if (trades.length > 0) await prisma.trade.createMany({ data: trades });
+
+    await Promise.all(
+      makerOrderUpdates.map(u =>
+        prisma.order.update({
+          where: { id: u.id },
+          data: { remaining: u.remaining, status: u.status },
+        })
+      )
+    );
+
+    await Promise.all(
+      makerBalanceUpdates.map((u) =>
+        u.isMakerOnYes
+          ? prisma.user.update({
+              where: { id: u.userId },
+              data: { usdBalance: { increment: u.amount } },
+            })
+          : prisma.user.update({
+              where: { id: u.userId },
+              data: { lockedBalance: { decrement: u.amount } },
+            })
+      )
+    );
+
+    await Promise.all(
+      makerPositionUpdates.map((u) =>
+        prisma.position.update({
+          where: {
+            userId_marketId: {
+              userId: u.userId,
+              marketId,
+            },
+          },
+          data: u.isMakerOnYes
+            ? {
+                lockedYesShares: { decrement: u.quantity },
+                totalSpent: { decrement: u.proceeds },
+              }
+            : {
+                noShares: { increment: u.quantity },
+                totalSpent: { increment: u.proceeds },
+              },
+        })
+      )
+    );
+  })();
+}
+
+function updateTakerSell({ marketId, trades, makerOrderUpdates, makerBalanceUpdates, makerPositionUpdates }: UpdateTakerParams) {
+  void (async () => {
+    if (trades.length > 0) await prisma.trade.createMany({ data: trades });
+
+    await Promise.all(
+      makerOrderUpdates.map((u) =>
+        prisma.order.update({
+          where: { id: u.id },
+          data: { remaining: u.remaining, status: u.status },
+        })
+      )
+    );
+    
+    await Promise.all(
+      makerBalanceUpdates.map((u) =>
+        u.isMakerOnYes
+          ? prisma.user.update({
+              where: { id: u.userId },
+              data: { lockedBalance: { decrement: u.amount } },
+            })
+          : prisma.user.update({
+              where: { id: u.userId },
+              data: { usdBalance: { increment: u.amount } },
+            })
+      )
+    );
+    
+    await Promise.all(
+      makerPositionUpdates.map((u) =>
+        prisma.position.update({
+          where: {
+            userId_marketId: {
+              userId: u.userId,
+              marketId,
+            },
+          },
+          data: u.isMakerOnYes
+            ? {
+                yesShares: { increment: u.quantity },
+                totalSpent: { increment: u.proceeds },
+              }
+            : {
+                lockedNoShares: { decrement: u.quantity },
+                totalSpent: { decrement: u.proceeds },
+              },
+        })
+      )
+    );
+  })();
 }
